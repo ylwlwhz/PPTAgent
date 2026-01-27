@@ -1,13 +1,13 @@
 # PPTEval 批量评估配置文件
 #
 # 使用方法:
-#   python batch_eval.py --config batch_eval_config.yaml
+#   python batch_eval.py --config batch_eval_config.yaml --debug  # 记录模型调用
 #   python batch_eval.py --config batch_eval_config.yaml --dry-run  # 试运行
 #   python batch_eval.py --config batch_eval_config.yaml --resume   # 断点续跑
 
 # 数据根目录（相对路径将基于此目录解析）
 # 使用 paths.py 中的 get_data_source_dirs(base_dir) 来获取数据目录
-data_root: ../../data_results/PPTAgent_v2.0.0
+data_root: ../../data_results/PPTAgent_v2.0.0 # Modify this
 
 # 生成结果的相对路径（相对于每条数据的目录）
 generation_result_dir: generation_task/results
@@ -35,10 +35,10 @@ output:
   score_dir: generation_task/results
 
 # 并发控制
-max_concurrent: 4
+max_concurrent: 1 # Modify this
 
 # 每个任务的超时时间（秒）
-timeout: 3600
+timeout: 5400
 
 # 是否覆盖已有评估结果
 overwrite: false
@@ -54,7 +54,7 @@ filter_keywords: []
 
 # 最大评估数量
 # 0 表示不限制
-max_cases: 1
+max_cases: 0
 
 # 状态文件路径（用于断点续跑）
 state_file: batch_eval_state.json

@@ -28,6 +28,9 @@ from pdf2image import convert_from_path
 from tqdm import tqdm
 from tqdm.asyncio import tqdm as atqdm
 
+# 直接导入本仓库的 paths 模块
+from paths import get_data_source_dirs, get_valid_item_dirs
+
 
 def setup_logging(log_dir: Path, log_level: int = logging.INFO) -> logging.Logger:
     """设置日志"""
@@ -82,18 +85,6 @@ def resolve_data_root(config: dict) -> Path:
     return data_root_path
 
 
-def get_paths_module(data_root: Path):
-    """动态导入 paths.py 模块"""
-    paths_file = data_root / "utils" / "paths.py"
-    if not paths_file.exists():
-        raise FileNotFoundError(f"paths.py not found at {paths_file}")
-    
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("paths", paths_file)
-    paths_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(paths_module)
-    return paths_module
-
 
 def find_ppt_file(data_dir: Path, config: dict) -> Path | None:
     """在数据目录下查找生成的 PPT 文件"""
@@ -118,11 +109,8 @@ def collect_eval_cases(
     """收集所有待评估的用例"""
     cases = []
     
-    # 导入 paths 模块
-    paths_module = get_paths_module(data_root)
-    
-    # 获取数据源目录
-    source_dirs = paths_module.get_data_source_dirs(base_dir=data_root)
+    # 获取数据源目录（使用本仓库的 paths 模块）
+    source_dirs = get_data_source_dirs(base_dir=data_root)
     
     exclude_dirs = set(config.get("exclude_dirs", []))
     filter_keywords = config.get("filter_keywords", [])
@@ -134,7 +122,7 @@ def collect_eval_cases(
             continue
         
         # 获取有效的子目录
-        item_dirs = paths_module.get_valid_item_dirs(source_dir, skip_names=exclude_dirs)
+        item_dirs = get_valid_item_dirs(source_dir, skip_names=exclude_dirs)
         
         for item_dir in item_dirs:
             # 应用关键词过滤
@@ -484,12 +472,48 @@ Be accurate and extract the actual text, do not describe or summarize."""
         # 计算平均分
         scores = self._calculate_scores(evals)
         
+        # 清理中间文件
+        self._cleanup_intermediate_files(ppt_path, images_dir, slide_images)
+        
         return {
             "evals": evals,
             "scores": scores,
             "ppt_file": str(ppt_path),
             "num_slides": len(slide_images),
         }
+    
+    def _cleanup_intermediate_files(self, ppt_path: Path, images_dir: Path, slide_images: list[Path]):
+        """清理中间文件，只保留评分结果"""
+        import shutil
+        
+        try:
+            # 删除幻灯片图片的描述 JSON 文件
+            for img_path in slide_images:
+                json_file = img_path.with_suffix(".json")
+                if json_file.exists():
+                    json_file.unlink()
+                    self.logger.debug(f"Deleted: {json_file}")
+                
+                # 删除文字提取 txt 文件
+                txt_file = img_path.with_suffix(".txt")
+                if txt_file.exists():
+                    txt_file.unlink()
+                    self.logger.debug(f"Deleted: {txt_file}")
+            
+            # 删除提取的结构文件
+            extracted_file = ppt_path.parent / (ppt_path.stem + "_extracted.json")
+            if extracted_file.exists():
+                extracted_file.unlink()
+                self.logger.debug(f"Deleted: {extracted_file}")
+            
+            # 删除图片目录
+            if images_dir.exists():
+                shutil.rmtree(images_dir)
+                self.logger.debug(f"Deleted directory: {images_dir}")
+            
+            self.logger.info(f"Cleaned up intermediate files for {ppt_path.name}")
+        except Exception as e:
+            self.logger.warning(f"Failed to cleanup intermediate files: {e}")
     
     def _calculate_scores(self, evals: dict) -> dict:
         """计算各维度平均分"""
