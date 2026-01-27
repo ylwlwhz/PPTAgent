@@ -17,8 +17,8 @@ MAX_LOGGING_LENGTH = int(os.getenv("DEEPPRESENTER_MAX_LOGGING_LENGTH", 1024))
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", 5))
 # count in chars, this is about the first 12 page of a dual-column paper
 TOOL_CUTOFF_LEN = int(os.getenv("TOOL_CUTOFF_LEN", 8000))
-# count in tokens
-CONTEXT_LENGTH_LIMIT = int(os.getenv("CONTEXT_LENGTH_LIMIT", 64_000))
+# count in tokens (增加到 128K 以支持长文档)
+CONTEXT_LENGTH_LIMIT = int(os.getenv("CONTEXT_LENGTH_LIMIT", 128_000))
 MIN_IMAGE_SIZE = os.getenv("MIN_IMAGE_SIZE", None)
 AGENT_PROMPT = """
 <Environment>

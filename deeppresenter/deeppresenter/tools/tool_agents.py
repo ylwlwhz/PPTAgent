@@ -1,4 +1,6 @@
 import base64
+import io
+import math
 from pathlib import Path
 
 import httpx
@@ -6,6 +8,42 @@ from appcore import mcp
 from PIL import Image
 
 from deeppresenter.utils import GLOBAL_CONFIG
+
+# 模型支持的最大像素数（留一些余量）
+MAX_IMAGE_PIXELS = 30_000_000
+
+
+def resize_image_if_needed(image_path: str) -> bytes:
+    """
+    如果图片像素数超过限制，则缩小图片并返回 JPEG 字节数据。
+    否则返回原始图片的字节数据。
+    """
+    with Image.open(image_path) as img:
+        width, height = img.size
+        total_pixels = width * height
+
+        if total_pixels <= MAX_IMAGE_PIXELS:
+            # 图片尺寸在限制内，直接读取原始文件
+            with open(image_path, "rb") as f:
+                return f.read()
+
+        # 计算缩放比例
+        scale = math.sqrt(MAX_IMAGE_PIXELS / total_pixels)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+
+        # 转换为 RGB（处理 RGBA 等格式）
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+
+        # 缩放图片
+        resized = img.resize((new_width, new_height), Image.LANCZOS)
+
+        # 保存到内存中的 JPEG
+        buffer = io.BytesIO()
+        resized.save(buffer, format="JPEG", quality=85)
+        buffer.seek(0)
+        return buffer.read()
 
 
 @mcp.tool()
@@ -70,7 +108,13 @@ async def image_caption(image_path: str) -> dict:
     Returns:
         The caption and size for the image
     """
-    image_b64 = f"data:image/jpeg;base64,{base64.b64encode(open(image_path, 'rb').read()).decode('utf-8')}"
+    # 获取原始尺寸（用于返回）
+    original_size = Image.open(image_path).size
+
+    # 如果图片过大则自动压缩
+    image_bytes = resize_image_if_needed(image_path)
+    image_b64 = f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+
     response = await GLOBAL_CONFIG.vision_model.run(
         messages=[
             {"role": "system", "content": _CAPTION_SYSTEM},
@@ -82,7 +126,7 @@ async def image_caption(image_path: str) -> dict:
     )
 
     return {
-        "size": Image.open(image_path).size,
+        "size": original_size,
         "caption": response.choices[0].message.content,
     }
 

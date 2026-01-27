@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import uuid
@@ -209,7 +210,8 @@ class ChatDemo:
                         convert_type=selected_convert_type,
                     )
                 ):
-                    if isinstance(yield_msg, str):
+                    if isinstance(yield_msg, (str, os.PathLike)):
+                        yield_msg = str(yield_msg)
                         file_content = "📄 幻灯片生成完成，点击下方按钮下载文件"
                         aggregated_parts.append(file_content)
                         aggregated_text = "\n\n".join(aggregated_parts).strip()

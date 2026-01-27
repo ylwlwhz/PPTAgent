@@ -1,6 +1,6 @@
 # Partly copied from wonderwhy-er/DesktopCommanderMCP
-FROM node:lts-bullseye-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+FROM docker.1ms.run/node:lts-bullseye-slim
+COPY --from=ghcr.1ms.run/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV MCP_CLIENT_DOCKER=true
 
@@ -8,7 +8,9 @@ ENV MCP_CLIENT_DOCKER=true
 WORKDIR /usr/src/app
 
 # Install ca-certificates first to avoid GPG signature issues, then other packages
-RUN apt-get update --allow-insecure-repositories && \
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list && \
+    sed -i 's/security.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list && \
+    apt-get update --allow-insecure-repositories && \
     apt-get install -y --fix-missing  --no-install-recommends --allow-unauthenticated ca-certificates && \
     update-ca-certificates && \
     apt-get update && \
@@ -35,6 +37,9 @@ ENV PATH="/opt/.venv/bin:${PATH}" \
     VIRTUAL_ENV="/opt/.venv"
 
 # Create Python virtual environment and install packages
+# 使用 npmmirror 提供的正确二进制镜像路径
+ENV UV_PYTHON_INSTALL_MIRROR=https://registry.npmmirror.com/-/binary/python-build-standalone \
+    UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN uv venv --python 3.13 $VIRTUAL_ENV && \
     uv pip install pip python-pptx matplotlib seaborn plotly numpy pandas opencv-python-headless pillow
 
@@ -59,7 +64,7 @@ RUN apt-get install -y --no-install-recommends \
         libxdamage1 \
         libxrandr2 \
         xdg-utils
-
+RUN npm config set registry https://registry.npmmirror.com
 RUN npm install -g @mermaid-js/mermaid-cli
 
 # Copying config and tailored server files (moved to end, removed CACHEBUST)

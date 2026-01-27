@@ -86,7 +86,15 @@ class PlaywrightConverter:
         page = await self.context.new_page()
         try:
             for html, pdf in zip(sorted(html_files), pdf_files):
-                await page.goto(Path(html).resolve().as_uri(), wait_until="networkidle")
+                # 使用 load 而非 networkidle，避免因外部资源加载失败导致超时
+                # 增加超时时间到 60 秒以处理复杂页面
+                await page.goto(
+                    Path(html).resolve().as_uri(),
+                    wait_until="load",
+                    timeout=60000,
+                )
+                # 额外等待一小段时间确保渲染完成
+                await page.wait_for_timeout(500)
                 await page.pdf(path=pdf, **PDF_OPTIONS, **ASPECT_RATIOS[aspect_ratio])
         except Exception as e:
             error(f"Failed to convert HTML to PDF: {e}")

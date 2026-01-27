@@ -1,0 +1,63 @@
+# PPTEval 批量评估配置文件
+#
+# 使用方法:
+#   python batch_eval.py --config batch_eval_config.yaml
+#   python batch_eval.py --config batch_eval_config.yaml --dry-run  # 试运行
+#   python batch_eval.py --config batch_eval_config.yaml --resume   # 断点续跑
+
+# 数据根目录（相对路径将基于此目录解析）
+# 使用 paths.py 中的 get_data_source_dirs(base_dir) 来获取数据目录
+data_root: ../../data_results/PPTAgent_v2.0.0
+
+# 生成结果的相对路径（相对于每条数据的目录）
+generation_result_dir: generation_task/results
+
+# 生成的 PPT 文件名（支持多个，按优先级尝试）
+ppt_filenames:
+  - slides.pptx
+  - slides.pdf
+
+# 评估模型配置
+model:
+  # API 基础地址（也可通过环境变量 API_BASE 设置）
+  api_base: https://ark.cn-beijing.volces.com/api/v3
+  # 语言模型名称（也可通过环境变量 LANGUAGE_MODEL 设置）
+  language_model: glm-4-7-251222
+  # 视觉模型名称（也可通过环境变量 VISION_MODEL 设置）
+  vision_model: doubao-seed-1-6-vision-250815
+  # 如果用 key, export OPENAI_API_KEY=
+
+# 评估结果保存
+output:
+  # 分数文件名格式: {judge_model}_{timestamp}_score
+  # judge_model: 使用的评估模型名称
+  # timestamp: 评估时间戳 (YYYYMMDD_HHMMSS)
+  score_dir: generation_task/results
+
+# 并发控制
+max_concurrent: 4
+
+# 每个任务的超时时间（秒）
+timeout: 3600
+
+# 是否覆盖已有评估结果
+overwrite: false
+
+# 要排除的目录名称列表
+exclude_dirs:
+  - unused
+  - __pycache__
+
+# 筛选条件：只评估包含这些关键词的用例
+# 为空列表 [] 则评估所有用例
+filter_keywords: []
+
+# 最大评估数量
+# 0 表示不限制
+max_cases: 1
+
+# 状态文件路径（用于断点续跑）
+state_file: batch_eval_state.json
+
+# 日志目录
+log_dir: batch_eval_logs

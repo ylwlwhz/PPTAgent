@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import sys
 import uuid
 from collections import defaultdict
@@ -32,6 +33,22 @@ from deeppresenter.utils.typings import MCPServer, Role
 from docker.errors import DockerException, NotFound
 
 
+def sanitize_container_name(name: str) -> str:
+    """Sanitize a string to be a valid Docker container name.
+    
+    Docker container names must match [a-zA-Z0-9][a-zA-Z0-9_.-]
+    """
+    # Replace spaces and invalid characters with underscores
+    sanitized = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)
+    # Ensure it starts with alphanumeric
+    if sanitized and not sanitized[0].isalnum():
+        sanitized = 'c' + sanitized
+    # Truncate if too long (Docker has a limit)
+    if len(sanitized) > 128:
+        sanitized = sanitized[:128]
+    return sanitized or 'container'
+
+
 class AgentEnv:
     def __init__(
         self,
@@ -47,9 +64,11 @@ class AgentEnv:
             raw_conf = json.load(f)
             self.config: list[MCPServer] = [MCPServer(**s) for s in raw_conf]
         # Pass workspace-specific variables to client to avoid global env pollution
+        # Sanitize WORKSPACE_ID for Docker container name compatibility
+        self.workspace_id = sanitize_container_name(self.workspace.stem)
         self.client = MCPClient(
             WORKSPACE=str(self.workspace),
-            WORKSPACE_ID=self.workspace.stem,
+            WORKSPACE_ID=self.workspace_id,
         )
         self.cutoff_len = TOOL_CUTOFF_LEN
         # caching overlong content
@@ -65,6 +84,8 @@ class AgentEnv:
         tool_call: ToolCall,
         limit_len: bool = False,
     ):
+        # 在 try 块之前初始化 arguments，避免异常时变量未定义
+        arguments = None
         try:
             server_id = self._tool_to_server[tool_call.function.name]
             with timer(f"Tool `{tool_call.function.name}` execution"):
@@ -153,8 +174,8 @@ class AgentEnv:
     async def __aenter__(self):
         try:
             client = docker.from_env()
-            container = client.containers.get(self.workspace.stem)
-            warning(f"Found duplicate {self.workspace.stem}, killed.")
+            container = client.containers.get(self.workspace_id)
+            warning(f"Found duplicate {self.workspace_id}, killed.")
             container.kill()
         # happend if cannot find the container
         except NotFound:

@@ -140,7 +140,13 @@ def finalize(
     # here we conduct some final checks on agent's outcome
     path = Path(outcome)
     if not path.exists():
-        return f"Outcome file {outcome} does not exist"
+        # 提供更详细的错误信息，帮助 Agent 理解如何修复
+        return (
+            f"ERROR: Outcome file '{outcome}' does not exist. "
+            f"You must use the `write_file` tool to create the file first. "
+            f"Do NOT use `echo` commands - they only print to console, they don't create files. "
+            f"Make sure the file path is within the workspace directory (use absolute paths starting with the workspace root)."
+        )
     if agent_name == "Research":
         if not (path.is_file() and path.suffix == ".md"):
             return "Outcome file should be a markdown file"

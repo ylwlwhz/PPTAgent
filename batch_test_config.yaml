@@ -1,0 +1,51 @@
+# Freeform 模式批量测试配置文件
+# 
+# 使用方法:
+#   python batch_test.py --config batch_test_config.yaml
+#   python batch_test.py --config batch_test_config.yaml --resume  # 断点续跑
+#   python batch_test.py --list  # 列出所有测试用例
+#   python batch_test.py --dry-run  # 试运行，查看将运行的用例
+
+# 数据根目录
+data_root: /home/cxs/PPT_Agent/Benchmark/data_results/PPTAgent_v2.0.0
+
+# 转换类型: deeppresenter (freeform) 或 pptagent (template)
+convert_type: deeppresenter
+
+# 最大并发数
+# 注意: freeform 模式使用多个 AI Agent，建议设置较小的并发数
+max_concurrent: 8
+
+# 每个任务的超时时间（秒）
+# freeform 模式可能需要较长时间，建议设置 30 分钟以上
+timeout: 3600
+
+# 是否覆盖已有结果
+# false: 跳过已有结果的用例
+# true: 重新运行所有用例
+overwrite: false
+
+# 要排除的目录名称列表
+# 这些目录下的数据不会被扫描
+exclude_dirs:
+  - unused
+
+# 输出文件名
+output_filename: slides.pdf
+
+# 状态文件路径（用于断点续跑）
+# 记录每个用例的运行状态
+state_file: batch_test_state.json
+
+# 日志目录
+log_dir: batch_test_logs
+
+# 筛选条件：只运行包含这些关键词的用例
+# 为空列表 [] 则运行所有用例
+# 示例: ["CSAPP", "MIT"] 只运行路径中包含 CSAPP 或 MIT 的用例
+filter_keywords: []
+
+# 最大运行数量
+# 0 表示不限制，运行所有符合条件的用例
+# 设置为具体数字可以限制运行数量，便于测试
+max_cases: 241

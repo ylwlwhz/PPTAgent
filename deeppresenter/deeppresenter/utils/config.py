@@ -160,6 +160,7 @@ class LLM(BaseModel):
         retry_times: int = RETRY_TIMES,
     ) -> ChatCompletion:
         """Execute chat or tool call using the specified client"""
+        last_error: Exception | None = None
         for retry_idx in range(retry_times):
             await asyncio.sleep(2**retry_idx - 1)
             try:
@@ -168,7 +169,7 @@ class LLM(BaseModel):
                         model=model,
                         messages=messages,
                         tools=tools,
-                        tool_choice="auto",
+                        tool_choice="required",  # Force model to call at least one tool
                         **sampling_params,
                     )
                 elif not self.soft_response_parsing and response_format is not None:
@@ -192,19 +193,21 @@ class LLM(BaseModel):
                     message.content = response_format(
                         **get_json_from_response(message.content)
                     ).model_dump_json(indent=2)
-                assert tools is None or len(message.tool_calls), (
+                assert tools is None or message.tool_calls, (
                     "No tool call returned from the model"
                 )
                 assert message.tool_calls or message.content, (
                     "Empty content returned from the model"
                 )
                 return response
-            except (AssertionError, ValidationError):
-                pass
+            except (AssertionError, ValidationError) as e:
+                last_error = e
             except Exception as e:
+                last_error = e
                 logging_openai_exceptions(model, e)
-        error(f"Model {model} failed for: {traceback.format_exc()}")
-        raise ValueError(f"{model} cannot get valid response from the model")
+        error_msg = str(last_error) if last_error else "Unknown error after retries"
+        error(f"Model {model} failed for: {error_msg}")
+        raise ValueError(f"{model} cannot get valid response from the model: {error_msg}")
 
     async def run(
         self,
@@ -250,26 +253,191 @@ class LLM(BaseModel):
         height: int,
         retry_times: int = RETRY_TIMES,
     ) -> ImagesResponse:
-        """Unified interface for image generation"""
+        """Unified interface for image generation
+        
+        Supports two modes:
+        1. OpenAI images.generate API (for DALL-E, Volcengine, etc.)
+        2. Chat completions API (for Gemini and other multimodal models)
+        """
         if MIN_IMAGE_SIZE is not None and (width * height) < int(MIN_IMAGE_SIZE):
             ratio = (int(MIN_IMAGE_SIZE) / (width * height)) ** 0.5
             width = int(width * ratio)
             height = int(height * ratio)
         width = ((width + 15) // 16) * 16
         height = ((height + 15) // 16) * 16
+        
+        # Check if using chat completions mode (for Gemini-style models)
+        use_chat_mode = self.sampling_parameters.get("use_chat_completions", False)
+        
         async with self._semaphore:
             for retry_idx in range(retry_times):
                 await asyncio.sleep(retry_idx)
                 try:
-                    return await self._client.images.generate(
-                        prompt=prompt,
-                        model=self.model,
-                        size=f"{width}x{height}",
-                        **self.sampling_parameters,
-                    )
+                    if use_chat_mode:
+                        return await self._generate_image_via_chat(prompt, width, height)
+                    else:
+                        return await self._generate_image_via_images_api(prompt, width, height)
                 except Exception as e:
                     logging_openai_exceptions(self.model, e)
             raise ValueError("Cannot generate image")
+
+    async def _generate_image_via_images_api(
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+    ) -> ImagesResponse:
+        """Generate image using OpenAI images.generate API"""
+        params = {k: v for k, v in self.sampling_parameters.items() if k != "use_chat_completions"}
+        return await self._client.images.generate(
+            prompt=prompt,
+            model=self.model,
+            size=f"{width}x{height}",
+            **params,
+        )
+
+    def _get_closest_aspect_ratio(self, width: int, height: int) -> str:
+        """Convert width/height to closest supported Gemini aspect ratio"""
+        # Supported aspect ratios for Gemini
+        supported_ratios = [
+            ("1:1", 1.0),
+            ("2:3", 2/3),
+            ("3:2", 3/2),
+            ("3:4", 3/4),
+            ("4:3", 4/3),
+            ("4:5", 4/5),
+            ("5:4", 5/4),
+            ("9:16", 9/16),
+            ("16:9", 16/9),
+            ("21:9", 21/9),
+        ]
+        
+        target_ratio = width / height
+        
+        # Find closest ratio
+        closest = min(supported_ratios, key=lambda x: abs(x[1] - target_ratio))
+        return closest[0]
+
+    def _get_image_size(self, width: int, height: int) -> str:
+        """Determine Gemini image size based on dimensions"""
+        # Max dimension determines the size tier
+        max_dim = max(width, height)
+        
+        if max_dim <= 1024:
+            return "1K"
+        elif max_dim <= 2048:
+            return "2K"
+        else:
+            return "4K"
+
+    async def _generate_image_via_chat(
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+    ) -> ImagesResponse:
+        """Generate image using chat completions API (for Gemini-style models)
+        
+        Note: Gemini API uses aspectRatio + imageSize instead of exact pixel dimensions.
+        Supported aspectRatios: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
+        Supported imageSizes: 1K, 2K, 4K
+        """
+        import base64
+        import math
+        import re
+        from openai.types.images_response import Image
+        
+        # Convert width/height to closest aspect ratio
+        aspect_ratio = self._get_closest_aspect_ratio(width, height)
+        
+        # Determine image size based on dimensions
+        image_size = self._get_image_size(width, height)
+        
+        # Build the image generation prompt with size instruction in text
+        # This helps when API proxy doesn't support generationConfig
+        generation_prompt = f"Generate a {aspect_ratio} aspect ratio image ({image_size} resolution). Description: {prompt}"
+        
+        messages = [
+            {
+                "role": "user",
+                "content": generation_prompt,
+            }
+        ]
+        
+        # Build extra body with Gemini-specific parameters
+        extra_body = {
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {
+                    "aspectRatio": aspect_ratio,
+                    "imageSize": image_size,
+                }
+            }
+        }
+        
+        # Log the request parameters for debugging
+        debug(f"[T2I] Requesting aspect_ratio={aspect_ratio}, image_size={image_size} (from {width}x{height})")
+        
+        # Call chat completions with Gemini-specific config
+        response = await self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            extra_body=extra_body,
+        )
+        
+        # Extract image from response
+        content = response.choices[0].message.content
+        
+        # Try to find base64 image data in the response
+        # Gemini returns images in various formats, try to extract them
+        image_data = None
+        image_url = None
+        
+        # Pattern 1: Look for inline base64 image data (data:image/...;base64,...)
+        base64_pattern = r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)'
+        match = re.search(base64_pattern, content or "")
+        if match:
+            image_data = match.group(1)
+        
+        # Pattern 2: Check if response contains raw base64 (no data URI prefix)
+        if not image_data and content:
+            # Check if content looks like base64
+            clean_content = content.strip()
+            if re.match(r'^[A-Za-z0-9+/=]+$', clean_content) and len(clean_content) > 1000:
+                image_data = clean_content
+        
+        # Pattern 3: Look for image URL in response
+        if not image_data:
+            url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+\.(?:png|jpg|jpeg|gif|webp)'
+            url_match = re.search(url_pattern, content or "", re.IGNORECASE)
+            if url_match:
+                image_url = url_match.group(0)
+        
+        # Pattern 4: Check if the model returned structured content with image parts
+        # This handles cases where the API returns images in a structured format
+        if not image_data and hasattr(response.choices[0].message, 'content'):
+            # Some APIs return content as a list of parts
+            msg = response.choices[0].message
+            if hasattr(msg, 'parts'):
+                for part in msg.parts:
+                    if hasattr(part, 'inline_data'):
+                        image_data = part.inline_data.data
+                        break
+        
+        if not image_data and not image_url:
+            raise ValueError(f"No image found in response. Content: {content[:500] if content else 'None'}...")
+        
+        # Build ImagesResponse compatible object
+        return ImagesResponse(
+            created=int(asyncio.get_event_loop().time()),
+            data=[
+                Image(
+                    b64_json=image_data,
+                    url=image_url,
+                    revised_prompt=None,
+                )
+            ],
+        )
 
     async def validate(self):
         models = await self._client.models.list()
