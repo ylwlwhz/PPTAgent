@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 from collections import defaultdict
@@ -539,8 +540,23 @@ Be accurate and extract the actual text, do not describe or summarize."""
         else:
             scores["coherence"] = 0
         
-        # 总分
-        scores["overall"] = (scores["design"] + scores["content"] + scores["coherence"]) / 3
+        # 计算三个维度的平均分
+        dim_scores = [scores["design"], scores["content"], scores["coherence"]]
+        
+        # 算术平均
+        scores["arithmetic_mean"] = sum(dim_scores) / len(dim_scores)
+        
+        # 几何平均（避免零值问题）
+        if all(s > 0 for s in dim_scores):
+            scores["geometric_mean"] = math.pow(
+                dim_scores[0] * dim_scores[1] * dim_scores[2], 
+                1/3
+            )
+        else:
+            scores["geometric_mean"] = 0.0
+        
+        # 保留 overall 作为算术平均的别名（向后兼容）
+        scores["overall"] = scores["arithmetic_mean"]
         
         return scores
 
