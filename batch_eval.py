@@ -87,19 +87,41 @@ def resolve_data_root(config: dict) -> Path:
 
 
 
-def find_ppt_file(data_dir: Path, config: dict) -> Path | None:
-    """在数据目录下查找生成的 PPT 文件"""
+def find_ppt_file(data_dir: Path, config: dict) -> list[tuple[Path, str]]:
+    """在数据目录下查找生成的 PPT 文件
+    
+    搜索路径：
+    1. {data_dir}/{result_dir}/*.pdf 或 *.pptx
+    2. {data_dir}/{result_dir}/{agent}/*.pdf 或 *.pptx
+    
+    Returns:
+        list of (ppt_file, agent_name) tuples, agent_name 为 None 表示根目录
+    """
     result_dir = config.get("generation_result_dir", "generation_task/results")
-    ppt_filenames = config.get("ppt_filenames", ["slides.pptx", "slides.pdf"])
+    ppt_patterns = config.get("ppt_patterns", ["*.pdf", "*.pptx"])
     
     result_path = data_dir / result_dir
+    found_files = []
     
-    for filename in ppt_filenames:
-        ppt_file = result_path / filename
-        if ppt_file.exists():
-            return ppt_file
+    # 1. 先在根目录查找
+    for pattern in ppt_patterns:
+        matches = list(result_path.glob(pattern))
+        if matches:
+            # 取第一个匹配的文件
+            found_files.append((matches[0], None))
+            break
     
-    return None
+    # 2. 在子目录（agent 目录）中查找
+    if result_path.exists():
+        for subdir in result_path.iterdir():
+            if subdir.is_dir() and not subdir.name.startswith('.') and not subdir.name.endswith('_images'):
+                for pattern in ppt_patterns:
+                    matches = list(subdir.glob(pattern))
+                    if matches:
+                        found_files.append((matches[0], subdir.name))
+                        break
+    
+    return found_files
 
 
 def collect_eval_cases(
@@ -132,17 +154,26 @@ def collect_eval_cases(
                 if not any(kw in item_path_str for kw in filter_keywords):
                     continue
             
-            # 查找 PPT 文件
-            ppt_file = find_ppt_file(item_dir, config)
-            if ppt_file is None:
+            # 查找 PPT 文件（可能有多个 agent）
+            ppt_files = find_ppt_file(item_dir, config)
+            if not ppt_files:
                 logger.debug(f"No PPT file found in {item_dir}")
                 continue
             
-            cases.append({
-                "data_dir": item_dir,
-                "ppt_file": ppt_file,
-                "relative_path": item_dir.relative_to(data_root),
-            })
+            for ppt_file, agent_name in ppt_files:
+                rel_path = item_dir.relative_to(data_root)
+                if agent_name:
+                    rel_path = rel_path / agent_name
+                
+                cases.append({
+                    "data_dir": item_dir,
+                    "ppt_file": ppt_file,
+                    "agent": agent_name,
+                    "relative_path": rel_path,
+                })
+                
+                if max_cases > 0 and len(cases) >= max_cases:
+                    break
             
             if max_cases > 0 and len(cases) >= max_cases:
                 break
@@ -594,8 +625,10 @@ async def run_evaluation(
                     timeout=timeout
                 )
                 
-                # 保存分数
+                # 保存分数（放入 agent 目录下）
                 score_dir = case["data_dir"] / config.get("output", {}).get("score_dir", "generation_task/results")
+                if case.get("agent"):
+                    score_dir = score_dir / case["agent"]
                 score_dir.mkdir(parents=True, exist_ok=True)
                 score_filename = get_score_filename(evaluator.model_name)
                 score_file = score_dir / score_filename
