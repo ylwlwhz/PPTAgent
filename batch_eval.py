@@ -612,11 +612,22 @@ async def run_evaluation(
     async def eval_case(case: dict) -> tuple[dict, dict | None, str | None]:
         case_key = str(case["relative_path"])
         
-        # 检查是否已完成
+        # 检查是否已完成（通过 state 或已存在的评分文件）
         if not overwrite and case_key in state["completed"]:
-            if resume:
-                logger.debug(f"Skipping completed: {case_key}")
-                return case, state["completed"][case_key], None
+            logger.debug(f"Skipping completed (state): {case_key}")
+            return case, state["completed"][case_key], None
+        
+        # 检查是否已有评分文件（即使 state 中没有记录）
+        if not overwrite:
+            score_dir = case["data_dir"] / config.get("output", {}).get("score_dir", "generation_task/results")
+            if case.get("agent"):
+                score_dir = score_dir / case["agent"]
+            # 检查是否存在任何评分文件
+            if score_dir.exists():
+                existing_scores = list(score_dir.glob(f"{evaluator.model_name}*_score"))
+                if existing_scores:
+                    logger.debug(f"Skipping (score file exists): {case_key} -> {existing_scores[0].name}")
+                    return case, {"existing_score_file": str(existing_scores[0])}, None
         
         async with semaphore:
             try:
@@ -726,6 +737,12 @@ def main():
         action="store_true",
         help="启用调试日志"
     )
+    parser.add_argument(
+        "--agents",
+        type=str,
+        nargs="+",
+        help="只评估指定的 agent 文件夹，例如: --agents NotebookLM Doubao"
+    )
     
     args = parser.parse_args()
     
@@ -758,22 +775,68 @@ def main():
     # 收集评估用例
     cases = collect_eval_cases(data_root, config, logger)
     
+    # 按 agent 过滤
+    if args.agents:
+        agent_set = set(args.agents)
+        original_count = len(cases)
+        cases = [c for c in cases if c.get("agent") in agent_set]
+        logger.info(f"Filtered by agents {args.agents}: {original_count} -> {len(cases)} cases")
+    
+    # 加载状态（用于 dry-run 和 resume）
+    state_file = get_script_dir() / config.get("state_file", "batch_eval_state.json")
+    state = load_state(state_file)
+    overwrite = config.get("overwrite", False)
+    
     if args.list or args.dry_run:
+        # 统计已完成和待执行的用例
+        completed_cases = []
+        pending_cases = []
+        skipped_by_file = []
+        model_name = config.get("model", {}).get("language_model", "unknown")
+        
+        for case in cases:
+            case_key = str(case['relative_path'])
+            if not overwrite and case_key in state["completed"]:
+                completed_cases.append(case)
+            else:
+                # 检查是否存在评分文件
+                score_dir = case["data_dir"] / config.get("output", {}).get("score_dir", "generation_task/results")
+                if case.get("agent"):
+                    score_dir = score_dir / case["agent"]
+                existing_scores = list(score_dir.glob(f"{model_name}*_score")) if score_dir.exists() else []
+                if not overwrite and existing_scores:
+                    skipped_by_file.append(case)
+                else:
+                    pending_cases.append(case)
+        
         logger.info("\nEvaluation cases:")
         for i, case in enumerate(cases, 1):
-            logger.info(f"  {i}. {case['relative_path']} -> {case['ppt_file'].name}")
+            case_key = str(case['relative_path'])
+            if not overwrite and case_key in state["completed"]:
+                status = "[DONE:state]"
+            elif case in skipped_by_file:
+                status = "[DONE:file]"
+            else:
+                status = "[PENDING]"
+            logger.info(f"  {i}. {status} {case['relative_path']} -> {case['ppt_file'].name}")
         
         if args.dry_run:
-            logger.info(f"\nDry run complete. Would evaluate {len(cases)} cases.")
+            logger.info(f"\nDry run summary:")
+            logger.info(f"  Total cases: {len(cases)}")
+            logger.info(f"  Completed (in state): {len(completed_cases)}")
+            logger.info(f"  Completed (score file exists): {len(skipped_by_file)}")
+            logger.info(f"  Will evaluate: {len(pending_cases)}")
+            if state.get("failed"):
+                logger.info(f"  Previously failed: {len(state['failed'])}")
         return
     
     if not cases:
         logger.warning("No cases to evaluate")
         return
     
-    # 加载状态
-    state_file = get_script_dir() / config.get("state_file", "batch_eval_state.json")
-    state = load_state(state_file) if args.resume else {"completed": {}, "failed": {}}
+    # 如果不是 resume 模式，清空状态
+    if not args.resume:
+        state = {"completed": {}, "failed": {}}
     
     # 初始化评估器
     evaluator = PPTEvaluator(config, logger)
